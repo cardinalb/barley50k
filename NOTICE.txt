@@ -1,0 +1,8 @@
+GO50K
+Copyright 2024 The James Hutton Institute / The International Barley Hub
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+Portions of this software were developed at the Information and Computational
+Sciences Department at the James Hutton Institute, Invergowrie, Scotland.
