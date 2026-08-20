@@ -15,14 +15,18 @@ limitations under the License.
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,15 +40,6 @@ import (
 var (
 	projectFilePtr = flag.String("project", "", "Location of project file")
 )
-
-// Define the command line arguments
-// var (
-// 	projectFilePtr        = flag.String("project", "", "Location of project file")
-// 	rFilePtr              = flag.String("r", "", "Location of R files")
-// 	thetaFilePtr          = flag.String("theta", "", "Location of theta file")
-// 	submissionTemplatePtr = flag.String("template", "", "Location of submission_template.txt file")
-// 	outputPtr             = flag.String("output", "", "The output directory for files")
-// )
 
 func main() {
 	CallClear()
@@ -104,7 +99,7 @@ func main() {
 	//rcode.ReturnCode(*outputPtr)
 
 	setup.StartFileLoadImport("(Stage 6/6)", "jim_modified.R")
-	runRCode()
+	runRCode(mappings)
 
 	timeEnd := time.Now()
 
@@ -114,7 +109,7 @@ func main() {
 
 }
 
-func runRCode() {
+func runRCode(mappings map[string]string) {
 
 	fmt.Println("Running R code...")
 
@@ -134,8 +129,85 @@ func runRCode() {
 	}
 
 	convertAB2ACGT()
-	ProcessGenotypeData()
+	ProcessGenotypeData(mappings)
+	projectName := filepath.Base(filepath.Clean(*projectFilePtr))
+	if err := archiveOutputFiles(projectName); err != nil {
+		log.Fatalf("failed to archive output files: %v", err)
+	}
 
+}
+
+func archiveOutputFiles(projectName string) error {
+	return archiveOutputFilesInDirectory(projectName, "sample_data")
+}
+
+func archiveOutputFilesInDirectory(projectName, outputDirectory string) error {
+	archivePath := filepath.Join(outputDirectory, projectName+".zip")
+	temporaryArchivePath := archivePath + ".tmp"
+	filesToArchive := []string{
+		"final_calls.txt",
+		"OUT_FinalReportR.txt",
+		"OUT_FinalReportTheta.txt",
+		"parms.csv",
+		"stats.csv",
+		"STATS.txt",
+		"ids.csv",
+	}
+
+	temporaryArchive, err := os.Create(temporaryArchivePath)
+	if err != nil {
+		return fmt.Errorf("create archive: %w", err)
+	}
+
+	archiveWriter := zip.NewWriter(temporaryArchive)
+	for _, filename := range filesToArchive {
+		filePath := filepath.Join(outputDirectory, filename)
+		inputFile, err := os.Open(filePath)
+		if err != nil {
+			archiveWriter.Close()
+			temporaryArchive.Close()
+			os.Remove(temporaryArchivePath)
+			return fmt.Errorf("open %s: %w", filePath, err)
+		}
+
+		archiveEntry, err := archiveWriter.Create(filename)
+		if err == nil {
+			_, err = io.Copy(archiveEntry, inputFile)
+		}
+		inputFile.Close()
+		if err != nil {
+			archiveWriter.Close()
+			temporaryArchive.Close()
+			os.Remove(temporaryArchivePath)
+			return fmt.Errorf("add %s to archive: %w", filePath, err)
+		}
+	}
+
+	if err := archiveWriter.Close(); err != nil {
+		temporaryArchive.Close()
+		os.Remove(temporaryArchivePath)
+		return fmt.Errorf("finish archive: %w", err)
+	}
+	if err := temporaryArchive.Close(); err != nil {
+		os.Remove(temporaryArchivePath)
+		return fmt.Errorf("close archive: %w", err)
+	}
+	if err := os.Remove(archivePath); err != nil && !os.IsNotExist(err) {
+		os.Remove(temporaryArchivePath)
+		return fmt.Errorf("replace existing archive: %w", err)
+	}
+	if err := os.Rename(temporaryArchivePath, archivePath); err != nil {
+		os.Remove(temporaryArchivePath)
+		return fmt.Errorf("install archive: %w", err)
+	}
+
+	for _, filename := range filesToArchive {
+		if err := os.Remove(filepath.Join(outputDirectory, filename)); err != nil {
+			return fmt.Errorf("remove %s: %w", filename, err)
+		}
+	}
+
+	return nil
 }
 
 var clear map[string]func() //create a map for storing clear funcs
@@ -186,6 +258,7 @@ func convertAB2ACGT() {
 	defer refFile.Close()
 
 	scanner := bufio.NewScanner(refFile)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		parts := strings.Split(line, "\t")
@@ -229,12 +302,11 @@ func convertAB2ACGT() {
 	}
 	defer outFile.Close()
 
-	// Use a buffered writer for performance
-	writer := bufio.NewWriter(outFile)
-
-	fmt.Println("Opening input file for conversion from AB to ACGT format...")
+	writer := bufio.NewWriterSize(outFile, 256*1024)
+	defer writer.Flush()
 
 	scanner = bufio.NewScanner(inFile)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	counter := 0
 
 	for scanner.Scan() { // [cite: 5]
@@ -261,6 +333,7 @@ func convertAB2ACGT() {
 					calls = []string{}
 				}
 
+				markerCalls := callsReference[markerName]
 				writer.WriteString(markerName)
 
 				for _, call := range calls {
@@ -276,20 +349,22 @@ func convertAB2ACGT() {
 					partB := string(call[1])
 
 					// Lookup Part A [cite: 7]
-					if val, ok := callsReference[markerName][partA]; ok {
+					if val, ok := markerCalls[partA]; ok {
 						partA = val
 					} else {
 						partA = "-"
 					}
 
 					// Lookup Part B [cite: 8]
-					if val, ok := callsReference[markerName][partB]; ok {
+					if val, ok := markerCalls[partB]; ok {
 						partB = val
 					} else {
 						partB = "-"
 					}
 
-					writer.WriteString("\t" + partA + partB)
+					writer.WriteString("\t")
+					writer.WriteString(partA)
+					writer.WriteString(partB)
 				}
 				writer.WriteString("\n")
 			}
@@ -305,17 +380,22 @@ func convertAB2ACGT() {
 			if len(markers) > 0 {
 				markers = markers[:len(markers)-1]
 			}
+			if len(markers) > 0 && markers[0] == "Row.Names" {
+				markers[0] = "Lines/Markers"
+			}
 
-			writer.WriteString("Line/Marker")
+			//writer.WriteString("Line/Marker")
 			// The Perl script splits the first line by tab (after translate),
 			// but markers[0] is usually empty or specific in these formats.
 			// We join the whole slice as per the Perl logic: print OUTPUT join( "\t", @markers )
 			if len(markers) > 0 {
-				writer.WriteString("\t" + strings.Join(markers, "\t"))
+				//writer.WriteString("\t")
+
+				writer.WriteString(strings.Join(markers, "\t"))
 			}
 			writer.WriteString("\n")
 
-			counter++ // [cite: 10]
+			counter++
 		}
 	}
 
@@ -325,11 +405,32 @@ func convertAB2ACGT() {
 	fmt.Println("Conversion completed.")
 }
 
-func ProcessGenotypeData() {
+func ProcessGenotypeData(mappings map[string]string) {
 
 	inputPath := "sample_data/final_calls.txt"
-	outputPath := "sample_data/FINAL.txt"
+	projectName := filepath.Base(filepath.Clean(*projectFilePtr))
+	outputPath := filepath.Join("sample_data", projectName+"_FINAL.txt")
 	statsPath := "sample_data/STATS.txt"
+	nameMapPath := "20170301_44040_ALL_NAMES_MAP.txt"
+
+	nameMapFile, err := os.Open(nameMapPath)
+	if err != nil {
+		log.Fatalf("failed to open name map %s: %v", nameMapPath, err)
+	}
+	defer nameMapFile.Close()
+
+	nameMap := make(map[string]string)
+	nameMapScanner := bufio.NewScanner(nameMapFile)
+	nameMapScanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	for nameMapScanner.Scan() {
+		mapFields := strings.Split(nameMapScanner.Text(), "\t")
+		if len(mapFields) >= 2 {
+			nameMap[mapFields[0]] = mapFields[1]
+		}
+	}
+	if err := nameMapScanner.Err(); err != nil {
+		log.Fatalf("failed to read name map %s: %v", nameMapPath, err)
+	}
 
 	// 1. Open Input File
 	inFile, err := os.Open(inputPath)
@@ -344,13 +445,14 @@ func ProcessGenotypeData() {
 		//return fmt.Errorf("failed to create output: %w", err)
 	}
 	defer outFile.Close()
-	outWriter := bufio.NewWriter(outFile)
+	outWriter := bufio.NewWriterSize(outFile, 256*1024)
 	defer outWriter.Flush()
 
 	// 3. Initialize Stats Map
 	alleles := make(map[string]int)
 
 	scanner := bufio.NewScanner(inFile)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	isHeader := true
 
 	// 4. Process Line by Line
@@ -359,8 +461,18 @@ func ProcessGenotypeData() {
 
 		// Handle Header (Row 0)
 		if isHeader {
-			// Perl[cite: 3]: splits but ignores result, printing original row
-			if _, err := outWriter.WriteString(row + "\n"); err != nil {
+			headerFields := strings.Split(row, "\t")
+			for index, field := range headerFields {
+				if field == "Row.Names" {
+					headerFields[index] = ""
+					continue
+				}
+				if mappedValue, ok := mappings[field]; ok {
+					headerFields[index] = mappedValue
+				}
+			}
+
+			if _, err := outWriter.WriteString(strings.Join(headerFields, "\t") + "\n"); err != nil {
 				//return err
 			}
 			isHeader = false
@@ -375,6 +487,9 @@ func ProcessGenotypeData() {
 
 		// Perl[cite: 5]: First column is marker, printed immediately
 		marker := fields[0]
+		if mappedMarker, ok := nameMap[marker]; ok {
+			marker = mappedMarker
+		}
 		outWriter.WriteString(marker)
 
 		// Process remaining columns (calls)
@@ -384,33 +499,39 @@ func ProcessGenotypeData() {
 			// Normalization Logic [cite: 6-12]
 			// Collapsed into a switch for efficiency
 			switch c {
-			case "", "N/A", "-F", "FF", "BB", "BG": // [cite: 11, 12]
+			case "", "N/A", "-F", "FF", "BB", "BG":
 				c = "--"
-			case " C C", "-C", "C-", "C": // [cite: 6, 7, 8]
-				c = "CC"
-			case "-A", "A", "A-": // [cite: 9]
-				c = "AA"
-			case "-T", "T", "T-": // [cite: 10]
-				c = "TT"
-			case "-G", "G-":
-				c = "GG"
-			case "CA":
-				c = "AC"
-			case "TA": // [cite: 10]
-				c = "AT"
+			case " C C", "-C", "C-", "C", "CC":
+				c = "C"
+			case "-A", "A", "A-", "AA":
+				c = "A"
+			case "-T", "T", "T-", "TT":
+				c = "T"
+			case "-G", "G-", "G", "GG":
+				c = "G"
+			case "CA", "AC":
+				c = "A/C"
+			case "TA", "AT":
+				c = "A/T"
 			case "TC":
-				c = "CT"
-			case "TG":
-				c = "GT"
-			case "GC": // [cite: 11]
-				c = "CG"
+				c = "C/T"
+			case "TG", "GT":
+				c = "G/T"
+			case "GC", "CG":
+				c = "C/G"
+			case "AG", "GA":
+				c = "A/G"
+			default:
+				// If the call doesn't match any known pattern, leave it as is
+
 			}
 
-			// Collect stats [cite: 13]
+			// Collect stats
 			alleles[c]++
 
 			// Write call with leading tab
-			outWriter.WriteString("\t" + c)
+			outWriter.WriteString("\t")
+			outWriter.WriteString(c)
 		}
 		outWriter.WriteString("\n")
 	}
@@ -436,7 +557,7 @@ func ProcessGenotypeData() {
 	sort.Strings(sortedKeys)
 
 	for _, call := range sortedKeys {
-		line := fmt.Sprintf("%s\t%d\n", call, alleles[call])
+		line := call + "\t" + strconv.Itoa(alleles[call]) + "\n"
 		if _, err := statsWriter.WriteString(line); err != nil {
 			//return err
 		}

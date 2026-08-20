@@ -219,7 +219,7 @@ file.parms = file.path(output_dir, paste("parms", "csv", sep="."))
 
 ### Parallel Execution
 cat("Setting up parallel cluster...\n")
-n.cores <- parallel::detectCores() - 1
+n.cores <- min(8, max(1, parallel::detectCores() - 1))
 cl <- makeCluster(n.cores)
 registerDoParallel(cl)
 

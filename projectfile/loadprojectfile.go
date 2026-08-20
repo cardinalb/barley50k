@@ -18,7 +18,6 @@ import (
 	"bufio"
 	"log"
 	"os"
-	"regexp"
 	"strings"
 )
 
@@ -33,6 +32,7 @@ func LoadProjectFile(filename string) (map[string]string, int) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 
 	var split []string
 	data := make(map[string]string)
@@ -43,8 +43,7 @@ func LoadProjectFile(filename string) (map[string]string, int) {
 		line := strings.TrimSuffix(scanner.Text(), "\n")
 
 		if !seen {
-			match, _ := regexp.MatchString(`Sample_ID`, line)
-			if match {
+			if strings.Contains(line, "Sample_ID") {
 				seen = true
 			}
 		} else {

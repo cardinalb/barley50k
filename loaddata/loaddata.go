@@ -20,7 +20,6 @@ import (
 	"log"
 	"os"
 	"path"
-	"regexp"
 	"strings"
 )
 
@@ -35,6 +34,7 @@ func LoadData(filename string) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 
 	var split []string // this will hold the split lines data which can then be put into a map
 
@@ -50,8 +50,7 @@ func LoadData(filename string) {
 		line := strings.TrimSuffix(scanner.Text(), "\n")
 
 		if !seen {
-			match, _ := regexp.MatchString(`SNP Name`, line)
-			if match {
+			if strings.Contains(line, "SNP Name") {
 				seen = true
 			}
 		} else {
@@ -111,26 +110,30 @@ func printDataTransposed(data map[string]map[string]string, lines map[string]int
 		fmt.Println(err)
 		return
 	}
+	defer outFile.Close()
+	writer := bufio.NewWriterSize(outFile, 256*1024)
+	defer writer.Flush()
 
 	//print the markers header out
-	outFile.WriteString("Marker/Line")
+	writer.WriteString("Marker/Line")
 
 	for i := range lineOrder {
-		outFile.WriteString(",")
-		outFile.WriteString(lineOrder[i])
+		writer.WriteString(",")
+		writer.WriteString(lineOrder[i])
 	}
-	outFile.WriteString("\n")
+	writer.WriteString("\n")
 
 	for k := range markerOrder {
-		//fmt.Println(k)
-		outFile.WriteString(markerOrder[k])
+		marker := markerOrder[k]
+		var row strings.Builder
+		row.WriteString(marker)
 
 		for m := range lineOrder {
-
-			outFile.WriteString(",")
-			outFile.WriteString(data[markerOrder[k]][lineOrder[m]])
+			row.WriteByte(',')
+			row.WriteString(data[marker][lineOrder[m]])
 		}
-		outFile.WriteString("\n")
+		row.WriteByte('\n')
+		writer.WriteString(row.String())
 	}
 
 }
