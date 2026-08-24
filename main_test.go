@@ -107,10 +107,10 @@ func TestProcessGenotypeDataMapsHeaderAndWritesStats(t *testing.T) {
 	if err := os.Mkdir(outputDirectory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := ioutil.WriteFile(filepath.Join(outputDirectory, "final_calls.txt"), []byte("Line/Marker\tRow.Names\tSENTRIX_1\tUNKNOWN\nmarker\tAA\tCA\tN/A\n"), 0600); err != nil {
+	if err := ioutil.WriteFile(filepath.Join(outputDirectory, "final_calls.txt"), []byte("Line/Marker\tRow.Names\tUNKNOWN\tSENTRIX_1\nmarker_b\tAA\tN/A\tCA\nmarker_a\tCC\tN/A\tAG\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ioutil.WriteFile(filepath.Join(workingDirectory, "20170301_44040_ALL_NAMES_MAP.txt"), []byte("Lines/Markers\tLines/Markers\nmarker\tMappedMarker\n"), 0600); err != nil {
+	if err := ioutil.WriteFile(filepath.Join(workingDirectory, "20170301_44040_ALL_NAMES_MAP.txt"), []byte("Lines/Markers\tLines/Markers\nmarker_a\tMappedA\nmarker_b\tMappedB\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -134,7 +134,7 @@ func TestProcessGenotypeDataMapsHeaderAndWritesStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read processed output: %v", err)
 	}
-	expectedOutput := "Line/Marker\t\tSample_001\tUNKNOWN\nMappedMarker\tA\tA/C\t--\n"
+	expectedOutput := "Line/Marker\t\tSample_001\tUNKNOWN\nMappedA\tC\tA/G\t--\nMappedB\tA\tA/C\t--\n"
 	if string(output) != expectedOutput {
 		t.Errorf("processed output = %q, want %q", output, expectedOutput)
 	}
@@ -143,7 +143,7 @@ func TestProcessGenotypeDataMapsHeaderAndWritesStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read stats: %v", err)
 	}
-	expectedStats := "--\t1\nA\t1\nA/C\t1\n"
+	expectedStats := "--\t2\nA\t1\nA/C\t1\nA/G\t1\nC\t1\n"
 	if string(stats) != expectedStats {
 		t.Errorf("stats = %q, want %q", stats, expectedStats)
 	}

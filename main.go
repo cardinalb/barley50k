@@ -98,7 +98,7 @@ func main() {
 
 	//rcode.ReturnCode(*outputPtr)
 
-	setup.StartFileLoadImport("(Stage 6/6)", "jim_modified.R")
+	setup.StartFileLoadImport("(Stage 6/6)", "NEW_CLUSTER.R")
 	runRCode(mappings)
 
 	timeEnd := time.Now()
@@ -121,11 +121,12 @@ func runRCode(mappings map[string]string) {
 	fmt.Println(rlocation)
 	fmt.Println(tlocation)
 
-	err, _ := exec.Command("Rscript", rcodelocation, rlocation, tlocation, "70", ".").Output()
+	output, err := exec.Command("Rscript", rcodelocation, rlocation, tlocation, "70", ".").CombinedOutput()
 	// err, _ := exec.Command("Rscript", "jim_modified.R", "OUTFinalReportR.txt", "OUTFinalReportTheta.txt", "69", "./").Output()
 
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("R code failed: %v\n%s", err, output)
+		return
 	}
 
 	convertAB2ACGT()
@@ -420,12 +421,18 @@ func ProcessGenotypeData(mappings map[string]string) {
 	defer nameMapFile.Close()
 
 	nameMap := make(map[string]string)
+	nameMapOrder := make(map[string]int)
 	nameMapScanner := bufio.NewScanner(nameMapFile)
 	nameMapScanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	nameMapPosition := 0
 	for nameMapScanner.Scan() {
 		mapFields := strings.Split(nameMapScanner.Text(), "\t")
 		if len(mapFields) >= 2 {
 			nameMap[mapFields[0]] = mapFields[1]
+			if _, exists := nameMapOrder[mapFields[0]]; !exists {
+				nameMapOrder[mapFields[0]] = nameMapPosition
+				nameMapPosition++
+			}
 		}
 	}
 	if err := nameMapScanner.Err(); err != nil {
@@ -454,6 +461,9 @@ func ProcessGenotypeData(mappings map[string]string) {
 	scanner := bufio.NewScanner(inFile)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	isHeader := true
+	columnOrder := make([]int, 0)
+	dataRows := make([][]string, 0)
+	dataRowPosition := make(map[string]int)
 
 	// 4. Process Line by Line
 	for scanner.Scan() {
@@ -472,7 +482,20 @@ func ProcessGenotypeData(mappings map[string]string) {
 				}
 			}
 
-			if _, err := outWriter.WriteString(strings.Join(headerFields, "\t") + "\n"); err != nil {
+			columnOrder = make([]int, len(headerFields))
+			for index := range columnOrder {
+				columnOrder[index] = index
+			}
+			if len(columnOrder) > 2 {
+				sort.SliceStable(columnOrder[2:], func(first, second int) bool {
+					return headerFields[columnOrder[2+first]] < headerFields[columnOrder[2+second]]
+				})
+			}
+			sortedHeaderFields := make([]string, 0, len(headerFields))
+			for _, index := range columnOrder {
+				sortedHeaderFields = append(sortedHeaderFields, headerFields[index])
+			}
+			if _, err := outWriter.WriteString(strings.Join(sortedHeaderFields, "\t") + "\n"); err != nil {
 				//return err
 			}
 			isHeader = false
@@ -484,6 +507,26 @@ func ProcessGenotypeData(mappings map[string]string) {
 		if len(fields) == 0 {
 			continue
 		}
+		dataRows = append(dataRows, fields)
+		if _, exists := dataRowPosition[fields[0]]; !exists {
+			dataRowPosition[fields[0]] = len(dataRows) - 1
+		}
+	}
+
+	// Write genotype rows in the order defined by the name map input file.
+	sort.SliceStable(dataRows, func(first, second int) bool {
+		firstPosition, firstMapped := nameMapOrder[dataRows[first][0]]
+		secondPosition, secondMapped := nameMapOrder[dataRows[second][0]]
+		if firstMapped && secondMapped {
+			return firstPosition < secondPosition
+		}
+		if firstMapped != secondMapped {
+			return firstMapped
+		}
+		return dataRowPosition[dataRows[first][0]] < dataRowPosition[dataRows[second][0]]
+	})
+
+	for _, fields := range dataRows {
 
 		// Perl[cite: 5]: First column is marker, printed immediately
 		marker := fields[0]
@@ -493,8 +536,11 @@ func ProcessGenotypeData(mappings map[string]string) {
 		outWriter.WriteString(marker)
 
 		// Process remaining columns (calls)
-		calls := fields[1:]
-		for _, c := range calls {
+		for _, index := range columnOrder[1:] {
+			if index >= len(fields) {
+				continue
+			}
+			c := fields[index]
 
 			// Normalization Logic [cite: 6-12]
 			// Collapsed into a switch for efficiency
