@@ -23,8 +23,37 @@ import (
 	"strings"
 )
 
+type FileStats struct {
+	Filename    string
+	Records     int
+	AllowedSNPs int
+	SampleIDs   int
+}
+
+func LoadAllowedSNPs(filename string) map[string]struct{} {
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("failed to open allowed SNP file %s: %v", filename, err)
+	}
+	defer file.Close()
+
+	allowedSNPs := make(map[string]struct{})
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	for scanner.Scan() {
+		snp := strings.TrimSpace(scanner.Text())
+		if snp != "" {
+			allowedSNPs[snp] = struct{}{}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("failed to read allowed SNP file %s: %v", filename, err)
+	}
+	return allowedSNPs
+}
+
 // LoadData :
-func LoadData(filename string) {
+func LoadData(filename string, allowedSNPs map[string]struct{}) FileStats {
 	file, err := os.Open(filename)
 
 	if err != nil {
@@ -41,6 +70,8 @@ func LoadData(filename string) {
 	seen := false
 
 	data := make(map[string]map[string]string)
+	stats := FileStats{}
+	stats.Filename = filename
 
 	lines := make(map[string]int)
 	markers := make(map[string]int)
@@ -55,7 +86,14 @@ func LoadData(filename string) {
 			}
 		} else {
 			split = strings.Split(line, "\t")
+			if len(split) < 3 {
+				continue
+			}
 			snp := split[0]
+			if _, allowed := allowedSNPs[snp]; !allowed {
+				continue
+			}
+			stats.Records++
 			sample := split[1]
 			value := split[2]
 
@@ -76,7 +114,10 @@ func LoadData(filename string) {
 	if err := scanner.Err(); err != nil {
 		log.Fatal(err)
 	}
+	stats.AllowedSNPs = len(markers)
+	stats.SampleIDs = len(lines)
 	printDataTransposed(data, lines, markers, filename)
+	return stats
 }
 
 func printDataTransposed(data map[string]map[string]string, lines map[string]int, markers map[string]int, filename string) {
@@ -94,11 +135,11 @@ func printDataTransposed(data map[string]map[string]string, lines map[string]int
 		lineOrder = append(lineOrder, key)
 	}
 
-	m := fmt.Sprintf("Number of markers in file (%s)  : %d", filename, len(markerOrder))
-	l := fmt.Sprintf("Number of lines in the file (%s) : %d", filename, len(lineOrder))
+	//m := fmt.Sprintf("Number of markers in file (%s)  : %d", filename, len(markerOrder))
+	//l := fmt.Sprintf("Number of lines in the file (%s) : %d", filename, len(lineOrder))
 
-	fmt.Println(m)
-	fmt.Println(l)
+	//fmt.Println(m)
+	//fmt.Println(l)
 	// now we need to iterate over the details and write to a file
 	// Get the filename and path
 	dir, file := path.Split(filename)

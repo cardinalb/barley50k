@@ -40,7 +40,7 @@ func Welcome() {
 	fmt.Println()
 	color.Info.Print("Developed by Paul Shaw (ICS), Jim McNicol (BioSS) and Malcolm Macaulay (CMS)")
 	fmt.Println()
-	color.Info.Print("©2024 International Barley Hub / James Hutton Institute, Invergowrie, Scotland, DD2 5DA")
+	color.Info.Print("©2026 International Barley Hub / James Hutton Institute, Invergowrie, Scotland, DD2 5DA")
 	fmt.Println()
 	fmt.Println()
 }
@@ -55,7 +55,7 @@ func StartFileLoadImport(stage string, file string) {
 // GoRoutineInfo :
 func GoRoutineInfo() {
 	fmt.Println()
-	color.BgRed.Println("Using Go Routines to load files in parallel...")
+	color.BgRed.Println("Loading files in parallel...")
 	color.Red.Println("This takes about a minute to run on a reasonably fast machine.")
 	fmt.Println()
 }
